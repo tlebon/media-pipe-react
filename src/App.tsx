@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import {
 	ImageSegmenter,
@@ -13,7 +13,7 @@ function App() {
 	const imageSegmenter = useRef<ImageSegmenter | undefined>(undefined);
 	const refVideo = useRef<HTMLVideoElement>(null);
 	const canvasRef = useRef<HTMLCanvasElement>(null);
-	const blurRef = useRef<MediaStream | undefined>(undefined);
+	// const blurRef = useRef<MediaStream | undefined>(undefined);
 	const canvasCtx = useRef<CanvasRenderingContext2D | null | undefined>(null);
 	const rafId = useRef<number | null>(null);
 	const props = {
@@ -23,6 +23,17 @@ function App() {
 		muted: true,
 		playsInline: true,
 	};
+
+	const legendColors = [
+		[50, 50, 50, 255],
+		[0, 0, 255, 255],
+		[0, 255, 0, 255],
+		[0, 255, 255, 255],
+		[255, 0, 0, 255],
+		[255, 0, 255, 255],
+		[255, 255, 0, 255],
+		[255, 255, 255, 255],
+	];
 
 	const handleWebcamToggle = async () => {
 		if (hasGetUserMedia() && !webcamRunning) {
@@ -46,17 +57,26 @@ function App() {
 		);
 	}
 
+	useEffect(() => {
+		if (canvasRef.current) {
+			canvasCtx.current = canvasRef.current.getContext('2d');
+		}
+	}, []);
+
 	function callbackForVideo(result: ImageSegmenterResult) {
 		if (canvasCtx.current === null) return;
 		if (refVideo.current === null) return;
 		let imageData = canvasCtx.current?.getImageData(
 			0,
 			0,
-			refVideo.current.videoWidth,
-			refVideo.current.videoHeight
+			refVideo.current?.videoWidth ?? props.width,
+			refVideo.current?.videoHeight ?? props.height
 		).data;
-		const mask: number[] = result.categoryMask.getAsFloat32Array();
+		console.log(result);
+		const mask: Float32Array = result?.categoryMask?.getAsFloat32Array();
+
 		let j = 0;
+		if (imageData === undefined) return;
 		for (let i = 0; i < mask.length; ++i) {
 			const maskVal = Math.round(mask[i] * 255.0);
 			const legendColor = legendColors[maskVal % legendColors.length];
@@ -66,11 +86,12 @@ function App() {
 			imageData[j + 3] = (legendColor[3] + imageData[j + 3]) / 2;
 			j += 4;
 		}
+		if (imageData === undefined) return;
 		const uint8Array = new Uint8ClampedArray(imageData.buffer);
 		const dataNew = new ImageData(
 			uint8Array,
-			refVideo.current.videoWidth,
-			refVideo.current.videoHeight
+			refVideo.current?.videoWidth ?? props.width,
+			refVideo.current?.videoHeight ?? props.height
 		);
 		canvasCtx.current?.putImageData(dataNew, 0, 0);
 		if (webcamRunning === true) {
@@ -79,13 +100,14 @@ function App() {
 	}
 
 	const createImageSegmenter = async () => {
-		const audio = await FilesetResolver.forVisionTasks(
+		const video = await FilesetResolver.forVisionTasks(
 			'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.2/wasm'
 		);
 
-		imageSegmenter.current = await ImageSegmenter.createFromOptions(audio, {
+		imageSegmenter.current = await ImageSegmenter.createFromOptions(video, {
 			baseOptions: {
-				modelAssetPath: '/models',
+				modelAssetPath:
+					'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite',
 				delegate: 'GPU',
 			},
 			runningMode: 'VIDEO',
@@ -94,16 +116,18 @@ function App() {
 		});
 	};
 	// Get segmentation from the webcam
-	let lastWebcamTime = -1;
+	const lastWebcamTime = useRef(-1);
+
 	async function predictWebcam() {
 		if (refVideo.current === null) return;
-		if (refVideo.current?.currentTime === lastWebcamTime) {
+		if (refVideo.current?.currentTime === lastWebcamTime.current) {
 			if (webcamRunning === true) {
 				window.requestAnimationFrame(predictWebcam);
 			}
 			return;
 		}
-		lastWebcamTime = refVideo.current?.currentTime;
+
+		lastWebcamTime.current = refVideo.current?.currentTime;
 		canvasCtx.current?.drawImage(
 			refVideo.current,
 			0,
@@ -115,7 +139,7 @@ function App() {
 		if (imageSegmenter.current === undefined) {
 			return;
 		}
-		let startTimeMs = performance.now();
+		const startTimeMs = performance.now();
 
 		// Start segmenting the stream.
 		imageSegmenter.current.segmentForVideo(
@@ -125,39 +149,41 @@ function App() {
 		);
 	}
 
-	const handleBlurClick = async () => {
-		setBlur((blur) => !blur);
-		if (blur) {
-			createImageSegmenter();
+	const handleBlurClick = async (blur: boolean) => {
+		if (!blur) {
+			await createImageSegmenter();
+			predictWebcam();
 		}
+		setBlur((blur) => !blur);
 	};
 
 	return (
 		<>
-			<h1>Vite + React</h1>
-			<div className="card">
+			<div className="App">
+				<h1>Vite + React</h1>
 				<button onClick={handleWebcamToggle}>
 					{!webcamRunning ? 'Start' : 'Stop'} webcam
 				</button>
-				<button onClick={handleBlurClick}>
+				<button onClick={() => handleBlurClick(blur)}>
 					blur is {blur ? 'ON' : 'OFF'}
 				</button>
-				{!!blur && (
+				<div className="card">
+					<video
+						ref={refVideo}
+						{...props}
+						css={{
+							visibility: blur ? 'hidden' : 'visible',
+							display: blur ? 'none' : 'inline block',
+						}}
+					/>
 					<canvas
 						ref={canvasRef}
 						{...props}
 						// css={{visibility: !!blur ? 'hidden' : 'visible', display: !!blur ? 'none' : 'inline block'}}
 					/>
-				)}
-				{/* {!!blur && <video ref={video2ref} {...props} />} */}
-				<video
-					ref={refVideo}
-					{...props}
-					css={{
-						visibility: blur ? 'hidden' : 'visible',
-						display: blur ? 'none' : 'inline block',
-					}}
-				/>
+
+					{/* {!!blur && <video ref={video2ref} {...props} />} */}
+				</div>
 			</div>
 		</>
 	);
