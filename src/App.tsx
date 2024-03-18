@@ -73,17 +73,29 @@ function App() {
 			refVideo.current?.videoHeight ?? props.height
 		).data;
 		console.log(result);
-		const mask: Float32Array = result?.categoryMask?.getAsFloat32Array();
+		const mask: Float32Array =
+			result?.confidenceMasks?.[0].getAsFloat32Array();
 
 		let j = 0;
 		if (imageData === undefined) return;
 		for (let i = 0; i < mask.length; ++i) {
 			const maskVal = Math.round(mask[i] * 255.0);
 			const legendColor = legendColors[maskVal % legendColors.length];
-			imageData[j] = (legendColor[0] + imageData[j]) / 2;
-			imageData[j + 1] = (legendColor[1] + imageData[j + 1]) / 2;
-			imageData[j + 2] = (legendColor[2] + imageData[j + 2]) / 2;
-			imageData[j + 3] = (legendColor[3] + imageData[j + 3]) / 2;
+			//keep the color the same as the original image but apply the mask
+
+			imageData[j] =
+				(imageData[j] * maskVal + legendColor[0] * (255 - maskVal)) /
+				255;
+			imageData[j + 1] =
+				(imageData[j + 1] * maskVal +
+					legendColor[1] * (255 - maskVal)) /
+				255;
+			imageData[j + 2] =
+				(imageData[j + 2] * maskVal +
+					legendColor[2] * (255 - maskVal)) /
+				255;
+			imageData[j + 3] = 255;
+
 			j += 4;
 		}
 		if (imageData === undefined) return;
@@ -111,8 +123,8 @@ function App() {
 				delegate: 'GPU',
 			},
 			runningMode: 'VIDEO',
-			outputCategoryMask: true,
-			outputConfidenceMasks: false,
+			outputCategoryMask: false,
+			outputConfidenceMasks: true,
 		});
 	};
 	// Get segmentation from the webcam
