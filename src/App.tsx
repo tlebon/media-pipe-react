@@ -10,6 +10,9 @@ import './App.css';
 function App() {
 	const [blur, setBlur] = useState(false);
 	const [webcamRunning, setWebcamRunning] = useState(false);
+	const gco = useRef<GlobalCompositeOperation>('source-over');
+	const gcoBackground = useRef<GlobalCompositeOperation>('destination-out');
+	const [filter, setFilter] = useState('none');
 	const imageSegmenter = useRef<ImageSegmenter | undefined>(undefined);
 	const refVideo = useRef<HTMLVideoElement>(null);
 	const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -23,6 +26,35 @@ function App() {
 		muted: true,
 		playsInline: true,
 	};
+	const filterOptions = ['none', 'blur', 'grayscale', 'sepia', 'invert'];
+	const gcoOptions = [
+		'source-over',
+		'source-in',
+		'source-out',
+		'source-atop',
+		'destination-over',
+		'destination-in',
+		'destination-out',
+		'destination-atop',
+		'lighter',
+		'copy',
+		'xor',
+		'multiply',
+		'screen',
+		'overlay',
+		'darken',
+		'lighten',
+		'color-dodge',
+		'color-burn',
+		'hard-light',
+		'soft-light',
+		'difference',
+		'exclusion',
+		'hue',
+		'saturation',
+		'color',
+		'luminosity',
+	] as GlobalCompositeOperation[];
 
 	const legendColors = [
 		[50, 50, 50, 255],
@@ -63,16 +95,17 @@ function App() {
 		}
 	}, []);
 
-	function callbackForVideo(result: ImageSegmenterResult) {
-		if (canvasCtx.current === null) return;
+	async function callbackForVideo(result: ImageSegmenterResult) {
+		if (!canvasCtx.current) return;
 		if (refVideo.current === null) return;
-		let imageData = canvasCtx.current?.getImageData(
+		const imageData = canvasCtx.current.getImageData(
 			0,
 			0,
 			refVideo.current?.videoWidth ?? props.width,
 			refVideo.current?.videoHeight ?? props.height
 		).data;
-		console.log(result);
+		const backgroundImageData = new Uint8ClampedArray(imageData.buffer);
+		// console.log(result);
 		const mask: Float32Array =
 			result?.confidenceMasks?.[0].getAsFloat32Array();
 
@@ -80,32 +113,44 @@ function App() {
 		if (imageData === undefined) return;
 		for (let i = 0; i < mask.length; ++i) {
 			const maskVal = Math.round(mask[i] * 255.0);
-			const legendColor = legendColors[maskVal % legendColors.length];
-			//keep the color the same as the original image but apply the mask
 
-			imageData[j] =
-				(imageData[j] * maskVal + legendColor[0] * (255 - maskVal)) /
-				255;
-			imageData[j + 1] =
-				(imageData[j + 1] * maskVal +
-					legendColor[1] * (255 - maskVal)) /
-				255;
-			imageData[j + 2] =
-				(imageData[j + 2] * maskVal +
-					legendColor[2] * (255 - maskVal)) /
-				255;
-			imageData[j + 3] = 255;
+			//black mask
+			imageData[j] = mask[i] <= 0.5 ? imageData[j] : 50;
+			imageData[j + 1] = mask[i + 1] <= 0.5 ? imageData[j + 1] : 50;
+			imageData[j + 2] = mask[i + 2] <= 0.5 ? imageData[j + 2] : 50;
 
+			//use the below line (alone) to just show the person outline in the video
+			// imageData[j] = mask[i] <= 0.5 ? imageData[j] : 0;
+			// imageData[j + 1] = mask[i + 1] <= 0.5 ? imageData[j + 1] : 0;
+			// imageData[j + 2] = mask[i + 2] <= 0.5 ? imageData[j + 2] : 0;
+			// imageData[j + 3] = mask[i] >= 0.5 ? 0 : 255;
+
+			// imageData[j + 1] = (imageData[i + 1] * maskVal) / 255;
+			// imageData[j + 2] = (imageData[i + 2] * maskVal) / 255;
+			// imageData[j + 3] = 255;
 			j += 4;
 		}
-		if (imageData === undefined) return;
+		// const backgroundNew = new ImageData(
+		// 	backgroundImageData,
+		// 	refVideo.current?.videoWidth ?? props.width,
+		// 	refVideo.current?.videoHeight ?? props.height
+		// );
+		// canvasCtx.current.filter = 'blur(5px)';
+		// canvasCtx.current?.putImageData(backgroundNew, 0, 0);
+		// canvasCtx.current.globalCompositeOperation = gcoBackground.current;
+
 		const uint8Array = new Uint8ClampedArray(imageData.buffer);
 		const dataNew = new ImageData(
 			uint8Array,
 			refVideo.current?.videoWidth ?? props.width,
 			refVideo.current?.videoHeight ?? props.height
 		);
+		// const dataBitmap = await createImageBitmap(dataNew);
+
+		canvasCtx.current.filter = 'none';
 		canvasCtx.current?.putImageData(dataNew, 0, 0);
+		canvasCtx.current.globalCompositeOperation = gco.current;
+
 		if (webcamRunning === true) {
 			window.requestAnimationFrame(predictWebcam);
 		}
@@ -132,6 +177,7 @@ function App() {
 
 	async function predictWebcam() {
 		if (refVideo.current === null) return;
+		if (!canvasCtx.current) return;
 		if (refVideo.current?.currentTime === lastWebcamTime.current) {
 			if (webcamRunning === true) {
 				window.requestAnimationFrame(predictWebcam);
@@ -140,7 +186,7 @@ function App() {
 		}
 
 		lastWebcamTime.current = refVideo.current?.currentTime;
-		canvasCtx.current?.drawImage(
+		canvasCtx.current.drawImage(
 			refVideo.current,
 			0,
 			0,
@@ -179,14 +225,51 @@ function App() {
 				<button onClick={() => handleBlurClick(blur)}>
 					blur is {blur ? 'ON' : 'OFF'}
 				</button>
+				<select
+					value={gco.current}
+					className="select"
+					onChange={(e) =>
+						(gco.current = e.target
+							.value as GlobalCompositeOperation)
+					}
+				>
+					{gcoOptions.map((val) => (
+						<option key={val} value={val}>
+							{val}
+						</option>
+					))}
+				</select>
+				<select
+					value={gcoBackground.current}
+					className="select"
+					onChange={(e) =>
+						(gcoBackground.current = e.target
+							.value as GlobalCompositeOperation)
+					}
+				>
+					{gcoOptions.map((val) => (
+						<option key={val + 'back'} value={val}>
+							{val}
+						</option>
+					))}
+				</select>
+				<select
+					value={filter}
+					className="select"
+					onChange={(e) => setFilter(e.target.value)}
+				>
+					{filterOptions.map((val) => (
+						<option value={val}>{val}</option>
+					))}
+				</select>
 				<div className="card">
 					<video
 						ref={refVideo}
 						{...props}
-						css={{
-							visibility: blur ? 'hidden' : 'visible',
-							display: blur ? 'none' : 'inline block',
-						}}
+						// css={{
+						// 	visibility: blur ? 'hidden' : 'visible',
+						// 	display: blur ? 'none' : 'inline block',
+						// }}
 					/>
 					<canvas
 						ref={canvasRef}
