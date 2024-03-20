@@ -7,15 +7,82 @@ import {
 } from '@mediapipe/tasks-vision';
 import './App.css';
 
+function makeGaussKernel(sigma: number) {
+	const GAUSSKERN = 6.0;
+	const dim = parseInt(Math.max(3.0, GAUSSKERN * sigma));
+	const sqrtSigmaPi2 = Math.sqrt(Math.PI * 2.0) * sigma;
+	const s2 = 2.0 * sigma * sigma;
+	let sum = 0.0;
+
+	const kernel = new Float32Array(dim - !(dim & 1)); // Make it odd number
+	const half = parseInt(kernel.length / 2);
+	for (let j = 0, i = -half; j < kernel.length; i++, j++) {
+		kernel[j] = Math.exp(-(i * i) / s2) / sqrtSigmaPi2;
+		sum += kernel[j];
+	}
+	// Normalize the gaussian kernel to prevent image darkening/brightening
+	for (let i = 0; i < dim; i++) {
+		kernel[i] /= sum;
+	}
+	return kernel;
+}
+
+function blurPixels(
+	pixels: Uint8ClampedArray,
+	sigma: number,
+	imageWidth: number,
+	imageHeight: number
+) {
+	const kernel = makeGaussKernel(sigma);
+
+	const w = imageWidth;
+	const h = imageHeight;
+	const buff = new Uint8Array(w * h);
+	const mk = Math.floor(kernel.length / 2);
+	const kl = kernel.length;
+
+	for (let channel = 0; channel < 3; channel++) {
+		// First step process columns
+		for (let j = 0, hw = 0; j < h; j++, hw += w) {
+			for (let i = 0; i < w; i++) {
+				let sum = 0;
+				for (let k = 0; k < kl; k++) {
+					let col = i + (k - mk);
+					col = col < 0 ? 0 : col >= w ? w - 1 : col;
+					sum += pixels[(hw + col) * 4 + channel] * kernel[k];
+				}
+				buff[hw + i] = sum;
+			}
+		}
+
+		// Second step process rows
+		for (let j = 0, offset = 0; j < h; j++, offset += w) {
+			for (let i = 0; i < w; i++) {
+				let sum = 0;
+				for (let k = 0; k < kl; k++) {
+					let row = j + (k - mk);
+					row = row < 0 ? 0 : row >= h ? h - 1 : row;
+					sum += buff[row * w + i] * kernel[k];
+				}
+				const off = (j * w + i) * 4;
+				pixels[off + channel] = sum;
+			}
+		}
+	}
+	return pixels;
+}
+
+
+
 function App() {
 	const [blur, setBlur] = useState(false);
 	const [webcamRunning, setWebcamRunning] = useState(false);
 	const gco = useRef<GlobalCompositeOperation>('source-over');
-	const gcoBackground = useRef<GlobalCompositeOperation>('destination-out');
+	const gcoBackground = useRef<GlobalCompositeOperation>('source-over');
 	const [filter, setFilter] = useState('none');
 	const imageSegmenter = useRef<ImageSegmenter | undefined>(undefined);
 	const refVideo = useRef<HTMLVideoElement>(null);
-	const canvasRef = useRef<HTMLCanvasElement>(null);
+	const canvasRef = useRef<HTMLVideoElement>(null);
 	// const blurRef = useRef<MediaStream | undefined>(undefined);
 	const canvasCtx = useRef<CanvasRenderingContext2D | null | undefined>(null);
 	const rafId = useRef<number | null>(null);
@@ -55,6 +122,10 @@ function App() {
 		'color',
 		'luminosity',
 	] as GlobalCompositeOperation[];
+	const canvasEl = document.createElement('canvas');
+	canvasEl.width = props.width;
+	canvasEl.height = props.height;
+	const ctx = canvasEl.getContext('2d');
 
 	const legendColors = [
 		[50, 50, 50, 255],
@@ -89,67 +160,67 @@ function App() {
 		);
 	}
 
-	useEffect(() => {
-		if (canvasRef.current) {
-			canvasCtx.current = canvasRef.current.getContext('2d');
-		}
-	}, []);
-
 	async function callbackForVideo(result: ImageSegmenterResult) {
-		if (!canvasCtx.current) return;
+		if (!ctx) return;
 		if (refVideo.current === null) return;
-		const imageData = canvasCtx.current.getImageData(
+		const imageHeight = refVideo.current?.videoHeight ?? props.height;
+		const imageWidth = refVideo.current?.videoWidth ?? props.width;
+
+		const originalImage = ctx.getImageData(
 			0,
 			0,
-			refVideo.current?.videoWidth ?? props.width,
-			refVideo.current?.videoHeight ?? props.height
+			imageWidth,
+			imageHeight
 		).data;
-		const backgroundImageData = new Uint8ClampedArray(imageData.buffer);
+		const backgroundImageData = new Uint8ClampedArray(
+			originalImage.slice(0).buffer
+		);
+
+		const blurredImage = blurPixels(
+			backgroundImageData,
+			5,
+			imageWidth,
+			imageHeight
+		);
+
+		// console.log(backgroundImageData.buffer);
 		// console.log(result);
 		const mask: Float32Array =
 			result?.confidenceMasks?.[0].getAsFloat32Array();
 
 		let j = 0;
-		if (imageData === undefined) return;
+		if (originalImage === undefined) return;
 		for (let i = 0; i < mask.length; ++i) {
 			const maskVal = Math.round(mask[i] * 255.0);
 
 			//black mask
-			imageData[j] = mask[i] <= 0.5 ? imageData[j] : 50;
-			imageData[j + 1] = mask[i + 1] <= 0.5 ? imageData[j + 1] : 50;
-			imageData[j + 2] = mask[i + 2] <= 0.5 ? imageData[j + 2] : 50;
+			// imageData[j] = mask[i] <= 0.5 ? imageData[j] : 50;
+			// imageData[j + 1] = mask[i + 1] <= 0.5 ? imageData[j + 1] : 50;
+			// imageData[j + 2] = mask[i + 2] <= 0.5 ? imageData[j + 2] : 50;
 
 			//use the below line (alone) to just show the person outline in the video
-			// imageData[j] = mask[i] <= 0.5 ? imageData[j] : 0;
-			// imageData[j + 1] = mask[i + 1] <= 0.5 ? imageData[j + 1] : 0;
-			// imageData[j + 2] = mask[i + 2] <= 0.5 ? imageData[j + 2] : 0;
-			// imageData[j + 3] = mask[i] >= 0.5 ? 0 : 255;
+			originalImage[j] =
+				mask[i] <= 0.5 ? originalImage[j] : blurredImage[j];
+			originalImage[j + 1] =
+				mask[i + 1] <= 0.5 ? originalImage[j + 1] : blurredImage[j + 1];
+			originalImage[j + 2] =
+				mask[i + 2] <= 0.5 ? originalImage[j + 2] : blurredImage[j + 2];
+			originalImage[j + 3] = 255;
 
 			// imageData[j + 1] = (imageData[i + 1] * maskVal) / 255;
 			// imageData[j + 2] = (imageData[i + 2] * maskVal) / 255;
 			// imageData[j + 3] = 255;
 			j += 4;
 		}
-		// const backgroundNew = new ImageData(
-		// 	backgroundImageData,
-		// 	refVideo.current?.videoWidth ?? props.width,
-		// 	refVideo.current?.videoHeight ?? props.height
-		// );
-		// canvasCtx.current.filter = 'blur(5px)';
-		// canvasCtx.current?.putImageData(backgroundNew, 0, 0);
-		// canvasCtx.current.globalCompositeOperation = gcoBackground.current;
 
-		const uint8Array = new Uint8ClampedArray(imageData.buffer);
-		const dataNew = new ImageData(
-			uint8Array,
-			refVideo.current?.videoWidth ?? props.width,
-			refVideo.current?.videoHeight ?? props.height
-		);
-		// const dataBitmap = await createImageBitmap(dataNew);
+		//ctx.globalCompositeOperation = gcoBackground.current;
 
-		canvasCtx.current.filter = 'none';
-		canvasCtx.current?.putImageData(dataNew, 0, 0);
-		canvasCtx.current.globalCompositeOperation = gco.current;
+		const uint8Array = new Uint8ClampedArray(originalImage.buffer);
+		const dataNew = new ImageData(uint8Array, imageWidth, imageHeight);
+
+		ctx.filter = 'none';
+		ctx?.putImageData(dataNew, 0, 0);
+		//ctx.globalCompositeOperation = gco.current;
 
 		if (webcamRunning === true) {
 			window.requestAnimationFrame(predictWebcam);
@@ -177,7 +248,7 @@ function App() {
 
 	async function predictWebcam() {
 		if (refVideo.current === null) return;
-		if (!canvasCtx.current) return;
+		if (!ctx) return;
 		if (refVideo.current?.currentTime === lastWebcamTime.current) {
 			if (webcamRunning === true) {
 				window.requestAnimationFrame(predictWebcam);
@@ -186,13 +257,7 @@ function App() {
 		}
 
 		lastWebcamTime.current = refVideo.current?.currentTime;
-		canvasCtx.current.drawImage(
-			refVideo.current,
-			0,
-			0,
-			refVideo.current.videoWidth,
-			refVideo.current.videoHeight
-		);
+		ctx.drawImage(refVideo.current, 0, 0, props.width, props.height);
 		// Do not segmented if imageSegmenter.current hasn't loaded
 		if (imageSegmenter.current === undefined) {
 			return;
@@ -210,7 +275,8 @@ function App() {
 	const handleBlurClick = async (blur: boolean) => {
 		if (!blur) {
 			await createImageSegmenter();
-			predictWebcam();
+			await predictWebcam();
+			canvasRef.current!.srcObject = canvasEl.captureStream(30);
 		}
 		setBlur((blur) => !blur);
 	};
@@ -271,7 +337,7 @@ function App() {
 						// 	display: blur ? 'none' : 'inline block',
 						// }}
 					/>
-					<canvas
+					<video
 						ref={canvasRef}
 						{...props}
 						// css={{visibility: !!blur ? 'hidden' : 'visible', display: !!blur ? 'none' : 'inline block'}}
