@@ -4,7 +4,7 @@ import {
 	ImageSegmenterResult,
 } from '@mediapipe/tasks-vision';
 
-function blurPixels2(pixels: Uint8ClampedArray, imageWidth: number) {
+export function blurPixels2(pixels: Uint8ClampedArray, imageWidth: number) {
 	const tmp = new Uint8ClampedArray(pixels.length);
 	tmp.set(pixels);
 
@@ -27,7 +27,6 @@ function blurPixels2(pixels: Uint8ClampedArray, imageWidth: number) {
 	}
 	return pixels;
 }
-
 
 function makeGaussKernel(sigma: number) {
 	const GAUSSKERN = 6.0;
@@ -97,12 +96,16 @@ function blurPixels(
 export async function applyBlur(
 	videoStream: HTMLVideoElement
 ): Promise<MediaStream> {
+	if (!videoStream) {
+		throw new Error('No video stream provided');
+	}
 	const imageWidth = videoStream.videoWidth;
 	const imageHeight = videoStream.videoHeight;
 	const canvasEl = document.createElement('canvas');
 	canvasEl.width = imageWidth;
 	canvasEl.height = imageHeight;
-	const ctx = canvasEl.getContext('2d');
+	const ctx = canvasEl.getContext('2d', { willReadFrequently: true });
+
 	// create new canvas
 	// start request animtaion frame
 	// on everyframe update the canvas and compute the blur
